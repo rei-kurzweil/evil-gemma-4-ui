@@ -13,6 +13,8 @@ This project aims to run the Gemma-4-E4B model with vision support programmatica
 - Model: `Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf`
 - Vision Projector: `mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf`
 
+downloaded from here: https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive
+
 ## Architecture: Web UI for Image Uploads
 
 To make image interaction easier, we will implement a simple Web UI.
@@ -68,6 +70,11 @@ from vision_inference import analyze_image
 result = analyze_image("test_image.jpg", "Describe this image.")
 print(result)
 ```
+
+
+### 5. Configuration
+The system prompt will be read from ~/.system_prompts/ if any markdown files exist there, 
+otherwise it will default to the content of `system_prompt.md` in this repository.
 
 ## Running the Model
 

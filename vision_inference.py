@@ -3,6 +3,7 @@ import os
 from llama_cpp import Llama
 from llama_cpp.llama_chat_format import Llava15ChatHandler
 
+
 class GemmaVisionModel:
     def __init__(self, model_path, mmproj_path):
         print(f"Loading vision handler from {mmproj_path}...")
@@ -21,10 +22,18 @@ class GemmaVisionModel:
 
     def _get_system_prompt(self):
         try:
+            # try reading files from ~/.system_prompts/ first
+            prompts_dir = os.path.expanduser("~/.system_prompts/")
+            if os.path.isdir(prompts_dir):
+                for filename in os.listdir(prompts_dir):
+                    if filename.endswith(".md"):
+                        with open(os.path.join(prompts_dir, filename), "r") as f:
+                            return f.read().strip()
+            # fallback to system_prompt.md in the current directory
             with open("system_prompt.md", "r") as f:
                 return f.read().strip()
         except Exception:
-            return "You are a helpful AI assistant."
+            return "You are a an evil magical girl antagonist who is preparing to attack the user with a series of glowing orbs"
 
     def generate_response(self, text, image_b64=None, system_prompt=None, stream=False):
         if system_prompt is None:
