@@ -1,0 +1,3 @@
+llama-cpp-python>=0.2.76
+pillow
+flask
