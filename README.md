@@ -29,11 +29,6 @@ To make image interaction easier, we will implement a simple Web UI.
     - Input field for the prompt.
     - Real-time display of the model's response.
 
-### Implementation Plan (Next Steps)
-- Create `app.py` (Flask server).
-- Create `templates/index.html` (UI).
-- Create `static/style.css` (Styling).
-
 ## Setup Instructions
 
 ### 1. Create a Virtual Environment
