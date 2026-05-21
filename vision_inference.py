@@ -19,7 +19,17 @@ class GemmaVisionModel:
             verbose=True
         )
 
-    def generate_response(self, text, image_b64=None, system_prompt="You are a helpful AI assistant.", stream=False):
+    def _get_system_prompt(self):
+        try:
+            with open("system_prompt.md", "r") as f:
+                return f.read().strip()
+        except Exception:
+            return "You are a helpful AI assistant."
+
+    def generate_response(self, text, image_b64=None, system_prompt=None, stream=False):
+        if system_prompt is None:
+            system_prompt = self._get_system_prompt()
+            
         messages = [
             {
                 "role": "system",
