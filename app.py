@@ -1,11 +1,11 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 from vision_inference import get_model
+import json
 import os
 
 app = Flask(__name__)
 
-# Initialize model (this might take a few seconds)
-# In production, you might want to lazy-load this or use a separate worker
+# Initialize model
 print("Pre-loading Gemma-4 model...")
 try:
     llm_wrapper = get_model()
@@ -25,15 +25,21 @@ def chat():
 
     data = request.json
     user_message = data.get('message', '')
-    image_b64 = data.get('image', None) # Placeholder for when we add vision
+    image_b64 = data.get('image', None)
     
-    try:
-        response_text = llm_wrapper.generate_response(user_message, image_b64)
-        return jsonify({"response": response_text})
-    except Exception as e:
-        print(f"Inference error: {e}")
-        return jsonify({"response": f"Sorry, an error occurred during inference: {str(e)}"}), 500
+    def generate():
+        try:
+            stream = llm_wrapper.generate_response(user_message, image_b64, stream=True)
+            for chunk in stream:
+                delta = chunk['choices'][0]['delta']
+                if 'content' in delta:
+                    content = delta['content']
+                    yield f"data: {json.dumps({'content': content})}\n\n"
+        except Exception as e:
+            print(f"Streaming error: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
 
 if __name__ == '__main__':
-    # host='0.0.0.0' allows access from other devices on the network
     app.run(debug=False, host='0.0.0.0', port=5000)

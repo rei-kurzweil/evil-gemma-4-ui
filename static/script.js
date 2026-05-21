@@ -9,12 +9,15 @@ document.addEventListener('DOMContentLoaded', () => {
         userInput.style.height = userInput.scrollHeight + 'px';
     });
 
-    function appendMessage(role, text) {
+    function appendMessage(role, text = '') {
         const msgDiv = document.createElement('div');
         msgDiv.className = `message ${role}`;
-        msgDiv.innerHTML = `<p>${text}</p>`;
+        const p = document.createElement('p');
+        p.textContent = text;
+        msgDiv.appendChild(p);
         chatWindow.appendChild(msgDiv);
         chatWindow.scrollTop = chatWindow.scrollHeight;
+        return p; // Return the paragraph element to update it later
     }
 
     async function handleSend() {
@@ -25,21 +28,52 @@ document.addEventListener('DOMContentLoaded', () => {
         userInput.value = '';
         userInput.style.height = 'auto';
 
-        // Simulate AI response for the skeleton phase
-        // appendMessage('ai', 'This is a test response from the skeleton UI.');
+        // Create the AI message bubble placeholder
+        const aiMessageP = appendMessage('ai', '');
         
-        // Real implementation will fetch from backend
         try {
             const response = await fetch('/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: text })
             });
-            const data = await response.json();
-            appendMessage('ai', data.response);
+
+            if (!response.ok) {
+                aiMessageP.textContent = 'Error: Could not connect to the server.';
+                return;
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let aiText = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n');
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            if (data.content) {
+                                aiText += data.content;
+                                aiMessageP.textContent = aiText;
+                                chatWindow.scrollTop = chatWindow.scrollHeight;
+                            } else if (data.error) {
+                                aiMessageP.textContent = 'Error: ' + data.error;
+                            }
+                        } catch (e) {
+                            console.error('Error parsing SSE line:', e);
+                        }
+                    }
+                }
+            }
         } catch (error) {
             console.error('Error:', error);
-            appendMessage('system', 'Error: Could not connect to the server.');
+            aiMessageP.textContent = 'Error: Connection lost.';
         }
     }
 

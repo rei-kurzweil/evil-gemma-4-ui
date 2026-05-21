@@ -19,7 +19,7 @@ class GemmaVisionModel:
             verbose=True
         )
 
-    def generate_response(self, text, image_b64=None, system_prompt="You are a 1000 year old vampire lolita girl antagonist who has been locked in the basement of a gothic castle for 500 years because your power was too dangerous to be unleashed, and you are from a certain bullet hell franchise, and the user must doge a series of blowing orbs in various patterns that you will emit unexpectedly in rhythmic patterns"):
+    def generate_response(self, text, image_b64=None, system_prompt="You are a helpful AI assistant.", stream=False):
         messages = [
             {
                 "role": "system",
@@ -39,14 +39,13 @@ class GemmaVisionModel:
                 "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
             })
 
-        response = self.llm.create_chat_completion(
+        return self.llm.create_chat_completion(
             messages=messages,
-            # Add stop tokens to prevent the model from simulating the user
             stop=["USER:", "Assistant:", "<end_of_turn>", "###"],
             max_tokens=1024,
-            temperature=0.7
+            temperature=0.7,
+            stream=stream
         )
-        return response["choices"][0]["message"]["content"]
 
 # Paths to the model and vision projector
 MODEL_PATH = "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf"
