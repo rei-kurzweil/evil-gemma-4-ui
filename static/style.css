@@ -92,6 +92,7 @@ header h1 {
     background: var(--input-bg);
     border-top: 1px solid var(--border-color);
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-end;
     gap: 0.75rem;
 }
@@ -128,8 +129,44 @@ textarea:focus {
     color: var(--msg-user-bg);
 }
 
+.icon-btn.active {
+    color: var(--msg-user-bg);
+}
+
 #send-btn {
     color: var(--msg-user-bg);
+}
+
+.image-preview {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 1rem;
+    background: #f8f9fa;
+}
+
+.image-preview.hidden {
+    display: none;
+}
+
+.image-preview img {
+    width: 56px;
+    height: 56px;
+    object-fit: cover;
+    border-radius: 0.75rem;
+    border: 1px solid var(--border-color);
+}
+
+.clear-image-btn {
+    margin-left: auto;
+    border: none;
+    background: transparent;
+    color: #b02a37;
+    cursor: pointer;
+    font: inherit;
 }
 
 /* Mobile Adjustments */

@@ -25,16 +25,31 @@ def chat():
     if llm_wrapper is None:
         return jsonify({"response": "Error: Model not loaded on server."}), 500
 
-    data = request.json
-    user_message = data.get('message', '')
-    image_b64 = data.get('image', None)
+    data = request.get_json(silent=True) or {}
+    user_message = (data.get('message') or '').strip()
+    image_b64 = data.get('image')
+    image_mime_type = data.get('image_mime_type') or 'image/jpeg'
+
+    if not user_message and not image_b64:
+        return jsonify({"response": "Error: message or image is required."}), 400
+
+    if image_b64 is not None and not isinstance(image_b64, str):
+        return jsonify({"response": "Error: image must be a base64 string."}), 400
+
+    if not isinstance(image_mime_type, str) or not image_mime_type.startswith('image/'):
+        return jsonify({"response": "Error: image_mime_type must be an image MIME type."}), 400
     
     def generate():
         response_parts = []
         pending_text = ""
         demultiplexer = Demultiplexer()
         try:
-            stream = llm_wrapper.generate_response(user_message, image_b64, stream=True)
+            stream = llm_wrapper.generate_response(
+                user_message,
+                image_b64=image_b64,
+                image_mime_type=image_mime_type,
+                stream=True
+            )
             for chunk in stream:
                 delta = chunk['choices'][0]['delta']
                 if 'content' in delta:

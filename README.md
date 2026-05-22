@@ -21,11 +21,11 @@ To make image interaction easier, we will implement a simple Web UI.
 
 ### Components
 1.  **Backend (Flask):** 
-    - Handles image uploads and stores them temporarily.
+    - Accepts chat requests as JSON with `message` plus an optional base64-encoded `image`.
     - Interfaces with the Gemma-4 model via `vision_inference.py`.
-    - Returns analysis results as JSON.
+    - Streams model output back to the browser.
 2.  **Frontend (Vanilla HTML/JS):**
-    - A clean interface for selecting/dropping images.
+    - A clean interface for selecting an image and entering a prompt.
     - Input field for the prompt.
     - Real-time display of the model's response.
 
@@ -54,7 +54,7 @@ CMAKE_ARGS="-DGGML_VULKAN=ON" pip install llama-cpp-python
 The script `vision_inference.py` has been created. It:
 1. Loads the main model using `Llama`.
 2. Loads the `mmproj` (vision projector) via `Llava15ChatHandler`.
-3. Processes an input image and a prompt.
+3. Processes a user message and optionally injects an image into the same chat turn using a `data:image/...;base64,...` URL.
 4. Outputs the model's response.
 
 ### 4. Example Usage
