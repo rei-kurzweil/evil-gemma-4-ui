@@ -10,7 +10,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
     let selectedImage = null;
 
-    // Auto-resize textarea
     userInput.addEventListener('input', () => {
         userInput.style.height = 'auto';
         userInput.style.height = userInput.scrollHeight + 'px';
@@ -47,7 +46,25 @@ document.addEventListener('DOMContentLoaded', () => {
         msgDiv.appendChild(p);
         chatWindow.appendChild(msgDiv);
         chatWindow.scrollTop = chatWindow.scrollHeight;
-        return p; // Return the paragraph element to update it later
+        return p;
+    }
+
+    function buildOpenAiMessages(text) {
+        if (selectedImage) {
+            const content = [];
+            if (text) {
+                content.push({ type: 'text', text });
+            }
+            content.push({
+                type: 'image_url',
+                image_url: {
+                    url: `data:${selectedImage.mimeType};base64,${selectedImage.base64}`
+                }
+            });
+            return [{ role: 'user', content }];
+        }
+
+        return [{ role: 'user', content: text }];
     }
 
     async function handleSend() {
@@ -58,23 +75,20 @@ document.addEventListener('DOMContentLoaded', () => {
         userInput.value = '';
         userInput.style.height = 'auto';
 
-        // Create the AI message bubble placeholder
         const aiMessageP = appendMessage('ai', '');
-        
-        try {
-            const payload = { message: text };
-            if (selectedImage) {
-                payload.image = selectedImage.base64;
-                payload.image_mime_type = selectedImage.mimeType;
-            }
 
-            const response = await fetch('/chat', {
+        try {
+            const response = await fetch('/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({
+                    model: 'gemma-4-local',
+                    messages: buildOpenAiMessages(text),
+                    stream: true
+                })
             });
 
-            if (!response.ok) {
+            if (!response.ok || !response.body) {
                 aiMessageP.textContent = 'Error: Could not connect to the server.';
                 return;
             }
@@ -82,29 +96,46 @@ document.addEventListener('DOMContentLoaded', () => {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let aiText = '';
+            let buffer = '';
 
             while (true) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 
-                const chunk = decoder.decode(value, { stream: true });
-                const lines = chunk.split('\n');
+                const events = buffer.split('\n\n');
+                buffer = events.pop() || '';
 
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
+                for (const event of events) {
+                    for (const line of event.split('\n')) {
+                        if (!line.startsWith('data: ')) {
+                            continue;
+                        }
+
+                        const dataText = line.slice(6).trim();
+                        if (dataText === '[DONE]') {
+                            continue;
+                        }
+
                         try {
-                            const data = JSON.parse(line.slice(6));
-                            if (data.content) {
-                                aiText += data.content;
+                            const data = JSON.parse(dataText);
+                            const choice = (data.choices || [])[0] || {};
+                            const delta = choice.delta || {};
+
+                            if (delta.content) {
+                                aiText += delta.content;
                                 aiMessageP.textContent = aiText;
                                 chatWindow.scrollTop = chatWindow.scrollHeight;
-                            } else if (data.error) {
-                                aiMessageP.textContent = 'Error: ' + data.error;
+                            } else if (data.error && data.error.message) {
+                                aiMessageP.textContent = 'Error: ' + data.error.message;
                             }
-                        } catch (e) {
-                            console.error('Error parsing SSE line:', e);
+                        } catch (error) {
+                            console.error('Error parsing SSE line:', error);
                         }
                     }
+                }
+
+                if (done) {
+                    break;
                 }
             }
         } catch (error) {
