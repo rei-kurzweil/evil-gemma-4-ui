@@ -3,7 +3,7 @@ from llama_cpp import Llama
 from llama_cpp.llama_chat_format import Llava15ChatHandler
 
 
-DEFAULT_STOP = ["USER:", "Assistant:", "<end_of_turn>", "###"]
+DEFAULT_STOP = ["<turn|>", "USER:", "Assistant:", "ASSISTANT:", "<end_of_turn>", "###"]
 
 
 class DebugLlava15ChatHandler(Llava15ChatHandler):
@@ -39,17 +39,17 @@ class DebugLlava15ChatHandler(Llava15ChatHandler):
 
 class GemmaVisionModel:
     def __init__(self, model_path, mmproj_path):
-        print(f"Loading vision handler from {mmproj_path}...")
-        self.chat_handler = DebugLlava15ChatHandler(clip_model_path=mmproj_path)
-
         print(f"Loading model from {model_path}...")
         self.llm = Llama(
             model_path=model_path,
-            chat_handler=self.chat_handler,
             n_ctx=8192,
             n_gpu_layers=33,
             verbose=True,
         )
+        self.text_chat_format = self.llm.chat_format
+
+        print(f"Loading vision handler from {mmproj_path}...")
+        self.vision_chat_handler = DebugLlava15ChatHandler(clip_model_path=mmproj_path)
 
     def _get_system_prompt(self):
         try:
@@ -72,15 +72,23 @@ class GemmaVisionModel:
         temperature=0.1,
         stop=None,
         model=None,
+        tools=None,
+        tool_choice=None,
     ):
         prepared_messages = self._prepare_messages(messages)
-        return self.llm.create_chat_completion(
+        self._select_chat_runtime(prepared_messages)
+        response = self.llm.create_chat_completion(
             messages=prepared_messages,
             stop=stop or DEFAULT_STOP,
             max_tokens=max_tokens,
             temperature=temperature,
             stream=stream,
+            tools=tools,
+            tool_choice=tool_choice,
         )
+        if stream:
+            return response
+        return self._truncate_prompt_tool_call_response(response)
 
     def generate_response(
         self,
@@ -127,6 +135,104 @@ class GemmaVisionModel:
                 raise ValueError("Message content must be a string or an array.")
 
         return messages
+
+    def _select_chat_runtime(self, messages):
+        has_image = False
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list):
+                has_image = any(
+                    isinstance(part, dict) and part.get("type") == "image_url"
+                    for part in content
+                )
+                if has_image:
+                    break
+
+        if has_image:
+            self.llm.chat_handler = self.vision_chat_handler
+            self.llm.chat_format = None
+            print("[vision] Using Llava15 multimodal chat handler.")
+            return
+
+        self.llm.chat_handler = None
+        self.llm.chat_format = self.text_chat_format
+        print(f"[vision] Using GGUF chat template: {self.text_chat_format}.")
+
+    def _truncate_prompt_tool_call_response(self, response):
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return response
+
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            return response
+
+        content = message.get("content")
+        if not isinstance(content, str):
+            return response
+
+        tool_block = extract_first_tool_call_block(content)
+        if tool_block is None:
+            return response
+
+        if tool_block.strip() != content.strip():
+            print("[tool-call] Truncated assistant output to the first TOOL_CALL block.")
+
+        message["content"] = tool_block
+        return response
+
+
+def extract_first_tool_call_block(text):
+    if not isinstance(text, str):
+        return None
+
+    tool_call_start = text.find("TOOL_CALL")
+    if tool_call_start < 0:
+        return None
+
+    after = text[tool_call_start:]
+    args_pos = after.find("\nargs:")
+    if args_pos < 0:
+        return None
+
+    args_section = after[args_pos + len("\nargs:") :]
+    args_offset, args_object = extract_first_json_object(args_section)
+    if args_object is None:
+        return None
+
+    block_end = args_pos + len("\nargs:") + args_offset + len(args_object)
+    return after[:block_end].strip()
+
+
+def extract_first_json_object(text):
+    start = text.find("{")
+    if start < 0:
+        return None, None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return start, text[start : index + 1]
+
+    return None, None
 
 
 MODEL_PATH = "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf"

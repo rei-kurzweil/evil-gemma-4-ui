@@ -82,6 +82,8 @@ def chat_completions():
             temperature=normalized["temperature"],
             stop=normalized["stop"],
             model=model_name,
+            tools=normalized["tools"],
+            tool_choice=normalized["tool_choice"],
         )
     except Exception as exc:
         return openai_error(f"Completion failed: {exc}", 500)
@@ -350,6 +352,8 @@ def stream_completion(normalized, completion_id, created, model_name):
             temperature=normalized["temperature"],
             stop=normalized["stop"],
             model=model_name,
+            tools=normalized["tools"],
+            tool_choice=normalized["tool_choice"],
         )
 
         yield sse_chunk(
