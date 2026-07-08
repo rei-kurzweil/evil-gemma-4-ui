@@ -32,6 +32,7 @@ def health():
 
 @app.route("/v1/models")
 def list_models():
+    capabilities = llm_wrapper.capabilities() if llm_wrapper is not None else None
     return jsonify(
         {
             "object": "list",
@@ -40,9 +41,26 @@ def list_models():
                     "id": DEFAULT_MODEL_NAME,
                     "object": "model",
                     "owned_by": "local",
+                    "capabilities": capabilities,
                 }
             ],
         }
+    )
+
+
+@app.route("/v1/capabilities")
+def capabilities():
+    status = 200 if llm_wrapper is not None else 503
+    return (
+        jsonify(
+            {
+                "ok": llm_wrapper is not None,
+                "provider_name": "llama.cpp",
+                "default_model": DEFAULT_MODEL_NAME,
+                "capabilities": llm_wrapper.capabilities() if llm_wrapper is not None else None,
+            }
+        ),
+        status,
     )
 
 
@@ -84,6 +102,7 @@ def chat_completions():
             model=model_name,
             tools=normalized["tools"],
             tool_choice=normalized["tool_choice"],
+            response_format=normalized["response_format"],
         )
     except Exception as exc:
         return openai_error(f"Completion failed: {exc}", 500)
@@ -165,6 +184,7 @@ def normalize_chat_request(payload):
         "stop": stop,
         "tools": normalize_tools(payload.get("tools")),
         "tool_choice": normalize_tool_choice(payload.get("tool_choice")),
+        "response_format": normalize_response_format(payload.get("response_format")),
     }
 
 
@@ -284,6 +304,17 @@ def normalize_tool_calls(tool_calls):
     return normalized
 
 
+def normalize_response_format(response_format):
+    if response_format is None:
+        return None
+    if not isinstance(response_format, dict):
+        raise ValueError("`response_format` must be an object.")
+    response_type = response_format.get("type")
+    if response_type != "json_object":
+        raise ValueError("Only `response_format: {\"type\":\"json_object\"}` is supported.")
+    return {"type": "json_object"}
+
+
 def normalize_content_part(part):
     if not isinstance(part, dict):
         raise ValueError("Message content parts must be objects.")
@@ -354,6 +385,7 @@ def stream_completion(normalized, completion_id, created, model_name):
             model=model_name,
             tools=normalized["tools"],
             tool_choice=normalized["tool_choice"],
+            response_format=normalized["response_format"],
         )
 
         yield sse_chunk(

@@ -40,16 +40,36 @@ class DebugLlava15ChatHandler(Llava15ChatHandler):
 class GemmaVisionModel:
     def __init__(self, model_path, mmproj_path):
         print(f"Loading model from {model_path}...")
+        self.model_path = model_path
+        self.mmproj_path = mmproj_path
+        self.n_ctx = 32768
+        self.default_max_tokens = 1024
+        self.n_gpu_layers = 33
         self.llm = Llama(
             model_path=model_path,
-            n_ctx=8192,
-            n_gpu_layers=33,
+            n_ctx=self.n_ctx,
+            n_gpu_layers=self.n_gpu_layers,
             verbose=True,
         )
         self.text_chat_format = self.llm.chat_format
 
         print(f"Loading vision handler from {mmproj_path}...")
         self.vision_chat_handler = DebugLlava15ChatHandler(clip_model_path=mmproj_path)
+
+    def capabilities(self):
+        return {
+            "provider_name": "llama.cpp",
+            "model_id": "gemma-4-local",
+            "model_path": self.model_path,
+            "mmproj_path": self.mmproj_path,
+            "max_context_tokens": self.n_ctx,
+            "default_max_tokens": self.default_max_tokens,
+            "supports_vision": True,
+            "supports_tools": True,
+            "supports_streaming": True,
+            "supports_response_format_json_object": True,
+            "supports_chat_completions": True,
+        }
 
     def _get_system_prompt(self):
         try:
@@ -74,6 +94,7 @@ class GemmaVisionModel:
         model=None,
         tools=None,
         tool_choice=None,
+        response_format=None,
     ):
         prepared_messages = self._prepare_messages(messages)
         self._select_chat_runtime(prepared_messages)
@@ -85,6 +106,7 @@ class GemmaVisionModel:
             stream=stream,
             tools=tools,
             tool_choice=tool_choice,
+            response_format=response_format,
         )
         if stream:
             return response
