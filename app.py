@@ -1,22 +1,20 @@
 from flask import Flask, Response, jsonify, render_template, request
 from analyzer import consume_complete_sentences
 from demultiplexer import Demultiplexer
-from vision_inference import get_model
+from inference import (
+    ModelSwitchLockedError,
+    ModelUnavailableError,
+    get_loaded_model_id,
+    get_or_load_model,
+    list_model_definitions,
+)
 import json
 import time
 import uuid
 
 app = Flask(__name__)
 
-DEFAULT_MODEL_NAME = "gemma-4-local"
-
-print("Pre-loading Gemma-4 model...")
-try:
-    llm_wrapper = get_model()
-    print("Model loaded successfully.")
-except Exception as e:
-    print(f"Error loading model: {e}")
-    llm_wrapper = None
+DEFAULT_MODEL_NAME = "llama-3.1-local"
 
 
 @app.route("/")
@@ -26,49 +24,52 @@ def index():
 
 @app.route("/health")
 def health():
-    status = 200 if llm_wrapper is not None else 503
-    return jsonify({"ok": llm_wrapper is not None}), status
-
-
-@app.route("/v1/models")
-def list_models():
-    capabilities = llm_wrapper.capabilities() if llm_wrapper is not None else None
+    locked_model = get_loaded_model_id()
     return jsonify(
         {
-            "object": "list",
-            "data": [
-                {
-                    "id": DEFAULT_MODEL_NAME,
-                    "object": "model",
-                    "owned_by": "local",
-                    "capabilities": capabilities,
-                }
-            ],
+            "ok": True,
+            "loaded": locked_model is not None,
+            "locked_model": locked_model,
         }
     )
 
 
+@app.route("/v1/models")
+def list_models():
+    locked_model = get_loaded_model_id()
+    data = []
+    for model_id, definition in list_model_definitions().items():
+        data.append({
+            "id": model_id,
+            "object": "model",
+            "owned_by": "local",
+            "loaded": locked_model == model_id,
+            "locked": locked_model is not None,
+            "capabilities": definition,
+        })
+    return jsonify({"object": "list", "data": data})
+
+
 @app.route("/v1/capabilities")
 def capabilities():
-    status = 200 if llm_wrapper is not None else 503
-    return (
-        jsonify(
-            {
-                "ok": llm_wrapper is not None,
-                "provider_name": "llama.cpp",
-                "default_model": DEFAULT_MODEL_NAME,
-                "capabilities": llm_wrapper.capabilities() if llm_wrapper is not None else None,
-            }
-        ),
-        status,
+    definitions = list_model_definitions()
+    locked_model = get_loaded_model_id()
+    selected_model = locked_model or DEFAULT_MODEL_NAME
+    selected_definition = definitions.get(selected_model)
+    return jsonify(
+        {
+            "ok": True,
+            "loaded": locked_model is not None,
+            "provider_name": "llama.cpp",
+            "default_model": DEFAULT_MODEL_NAME,
+            "locked_model": locked_model,
+            "capabilities": selected_definition,
+        }
     )
 
 
 @app.route("/v1/chat/completions", methods=["POST"])
 def chat_completions():
-    if llm_wrapper is None:
-        return openai_error("Model not loaded on server.", 503)
-
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return openai_error("Expected a JSON object request body.", 400)
@@ -78,13 +79,26 @@ def chat_completions():
     except ValueError as exc:
         return openai_error(str(exc), 400)
 
+    model_name = normalized["model"]
+    known = list(list_model_definitions().keys())
+    if model_name not in known:
+        return openai_error(f"Unknown model '{model_name}'. Available: {', '.join(known)}", 400)
+
+    try:
+        wrapper = get_or_load_model(model_name)
+    except ModelSwitchLockedError as exc:
+        return openai_error(str(exc), 503)
+    except ModelUnavailableError as exc:
+        return openai_error(str(exc), 503)
+    except Exception as exc:
+        return openai_error(f"Failed to load model '{model_name}': {exc}", 500)
+
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
-    model_name = normalized["model"]
 
     if normalized["stream"]:
         return Response(
-            stream_completion(normalized, completion_id, created, model_name),
+            stream_completion(normalized, wrapper, completion_id, created, model_name),
             mimetype="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -93,7 +107,7 @@ def chat_completions():
         )
 
     try:
-        response = llm_wrapper.create_chat_completion(
+        response = wrapper.create_chat_completion(
             messages=normalized["messages"],
             stream=False,
             max_tokens=normalized["max_tokens"],
@@ -104,6 +118,8 @@ def chat_completions():
             tool_choice=normalized["tool_choice"],
             response_format=normalized["response_format"],
         )
+    except ValueError as exc:
+        return openai_error(str(exc), 400)
     except Exception as exc:
         return openai_error(f"Completion failed: {exc}", 500)
 
@@ -114,9 +130,6 @@ def chat_completions():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    if llm_wrapper is None:
-        return jsonify({"response": "Error: Model not loaded on server."}), 500
-
     data = request.get_json(silent=True) or {}
     try:
         payload = legacy_chat_payload_to_openai(data)
@@ -371,12 +384,12 @@ def normalize_non_stream_response(response, completion_id, created, model_name):
     return output
 
 
-def stream_completion(normalized, completion_id, created, model_name):
+def stream_completion(normalized, wrapper, completion_id, created, model_name):
     pending_text = ""
     demultiplexer = Demultiplexer()
 
     try:
-        stream = llm_wrapper.create_chat_completion(
+        stream = wrapper.create_chat_completion(
             messages=normalized["messages"],
             stream=True,
             max_tokens=normalized["max_tokens"],

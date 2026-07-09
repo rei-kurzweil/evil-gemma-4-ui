@@ -1,9 +1,39 @@
 import os
+import threading
 from llama_cpp import Llama
 from llama_cpp.llama_chat_format import Llava15ChatHandler
 
 
 DEFAULT_STOP = ["<turn|>", "USER:", "Assistant:", "ASSISTANT:", "<end_of_turn>", "###"]
+
+MODEL_DEFINITIONS = {
+    "gemma-4-local": {
+        "model_path": "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf",
+        "mmproj_path": "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf",
+        "default_stop": None,
+        "n_gpu_layers": 33,
+    },
+    "llama-3.1-local": {
+        "model_path": "Llama-3.1-8B-Lexi-Uncensored-Q6_K_L.gguf",
+        "mmproj_path": None,
+        "default_stop": [],
+        "n_gpu_layers": 0,
+    },
+}
+
+
+class ModelUnavailableError(Exception):
+    pass
+
+
+class ModelSwitchLockedError(Exception):
+    def __init__(self, requested_model_id, locked_model_id):
+        self.requested_model_id = requested_model_id
+        self.locked_model_id = locked_model_id
+        super().__init__(
+            f"Model '{locked_model_id}' is already loaded; switching to "
+            f"'{requested_model_id}' requires a process restart."
+        )
 
 
 class DebugLlava15ChatHandler(Llava15ChatHandler):
@@ -38,13 +68,15 @@ class DebugLlava15ChatHandler(Llava15ChatHandler):
 
 
 class GemmaVisionModel:
-    def __init__(self, model_path, mmproj_path):
+    def __init__(self, model_path, mmproj_path=None, default_stop=None, n_gpu_layers=0):
         print(f"Loading model from {model_path}...")
         self.model_path = model_path
         self.mmproj_path = mmproj_path
+        self._supports_vision = mmproj_path is not None
         self.n_ctx = 32768
         self.default_max_tokens = 1024
-        self.n_gpu_layers = 33
+        self.default_stop = default_stop if default_stop is not None else DEFAULT_STOP
+        self.n_gpu_layers = int(os.environ.get("N_GPU_LAYERS", str(n_gpu_layers)))
         self.llm = Llama(
             model_path=model_path,
             n_ctx=self.n_ctx,
@@ -53,18 +85,20 @@ class GemmaVisionModel:
         )
         self.text_chat_format = self.llm.chat_format
 
-        print(f"Loading vision handler from {mmproj_path}...")
-        self.vision_chat_handler = DebugLlava15ChatHandler(clip_model_path=mmproj_path)
+        if self._supports_vision:
+            print(f"Loading vision handler from {mmproj_path}...")
+            self.vision_chat_handler = DebugLlava15ChatHandler(clip_model_path=mmproj_path)
+        else:
+            print("No vision handler loaded (text-only model).")
 
     def capabilities(self):
         return {
             "provider_name": "llama.cpp",
-            "model_id": "gemma-4-local",
             "model_path": self.model_path,
             "mmproj_path": self.mmproj_path,
             "max_context_tokens": self.n_ctx,
             "default_max_tokens": self.default_max_tokens,
-            "supports_vision": True,
+            "supports_vision": self._supports_vision,
             "supports_tools": True,
             "supports_streaming": True,
             "supports_response_format_json_object": True,
@@ -97,10 +131,11 @@ class GemmaVisionModel:
         response_format=None,
     ):
         prepared_messages = self._prepare_messages(messages)
+        self._validate_vision_support(prepared_messages)
         self._select_chat_runtime(prepared_messages)
         response = self.llm.create_chat_completion(
             messages=prepared_messages,
-            stop=stop or DEFAULT_STOP,
+            stop=self.default_stop if stop is None else stop,
             max_tokens=max_tokens,
             temperature=temperature,
             stream=stream,
@@ -141,6 +176,16 @@ class GemmaVisionModel:
         ]
         return self.create_chat_completion(messages=messages, stream=stream)
 
+    def _validate_vision_support(self, messages):
+        if self._supports_vision:
+            return
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "image_url":
+                        raise ValueError("This model does not support vision/image inputs.")
+
     def _prepare_messages(self, messages):
         if not any(message.get("role") == "system" for message in messages):
             messages = [{"role": "system", "content": self._get_system_prompt()}, *messages]
@@ -159,6 +204,12 @@ class GemmaVisionModel:
         return messages
 
     def _select_chat_runtime(self, messages):
+        if not self._supports_vision:
+            self.llm.chat_handler = None
+            self.llm.chat_format = self.text_chat_format
+            print(f"[vision] Using GGUF chat template: {self.text_chat_format}.")
+            return
+
         has_image = False
         for message in messages:
             content = message.get("content")
@@ -257,16 +308,73 @@ def extract_first_json_object(text):
     return None, None
 
 
-MODEL_PATH = "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf"
-MMPROJ_PATH = "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf"
+_registry_lock = threading.Lock()
+_loaded_model = None
+_locked_model_id = None
 
-model_instance = None
+
+def list_model_definitions():
+    definitions = {}
+    for model_id, definition in MODEL_DEFINITIONS.items():
+        definitions[model_id] = {
+            "model_path": definition["model_path"],
+            "mmproj_path": definition["mmproj_path"],
+            "provider_name": "llama.cpp",
+            "max_context_tokens": 32768,
+            "default_max_tokens": 1024,
+            "supports_vision": definition["mmproj_path"] is not None,
+            "supports_tools": True,
+            "supports_streaming": True,
+            "supports_response_format_json_object": True,
+            "supports_chat_completions": True,
+        }
+    return definitions
 
 
-def get_model():
-    global model_instance
-    if model_instance is None:
-        if not os.path.exists(MODEL_PATH) or not os.path.exists(MMPROJ_PATH):
-            raise FileNotFoundError("Model or mmproj file not found in the root directory.")
-        model_instance = GemmaVisionModel(MODEL_PATH, MMPROJ_PATH)
-    return model_instance
+def get_loaded_model_id():
+    return _locked_model_id
+
+
+def get_loaded_model():
+    return _loaded_model
+
+
+def get_or_load_model(model_id):
+    if model_id not in MODEL_DEFINITIONS:
+        raise KeyError(model_id)
+
+    global _loaded_model
+    global _locked_model_id
+
+    with _registry_lock:
+        if _loaded_model is not None:
+            if _locked_model_id != model_id:
+                print(
+                    f"Rejecting model switch request: loaded '{_locked_model_id}', "
+                    f"requested '{model_id}'. Restart required."
+                )
+                raise ModelSwitchLockedError(model_id, _locked_model_id)
+            return _loaded_model
+
+        definition = MODEL_DEFINITIONS[model_id]
+        model_path = definition["model_path"]
+        mmproj_path = definition["mmproj_path"]
+        if not os.path.exists(model_path):
+            raise ModelUnavailableError(
+                f"Model file not found for '{model_id}': {model_path}"
+            )
+        if mmproj_path and not os.path.exists(mmproj_path):
+            raise ModelUnavailableError(
+                f"Vision projector file not found for '{model_id}': {mmproj_path}"
+            )
+
+        print(f"Selecting initial model '{model_id}' for this process.")
+        _loaded_model = GemmaVisionModel(
+            model_path,
+            mmproj_path,
+            default_stop=definition.get("default_stop"),
+            n_gpu_layers=definition.get("n_gpu_layers", 0),
+        )
+        _locked_model_id = model_id
+        print(f"Loaded and locked model '{model_id}'.")
+        return _loaded_model
