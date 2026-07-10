@@ -9,12 +9,38 @@ from inference import (
     list_model_definitions,
 )
 import json
+import logging
 import time
 import uuid
 
 app = Flask(__name__)
 
 DEFAULT_MODEL_NAME = "llama-3.1-local"
+HEALTH_LOG_INTERVAL_SECONDS = 60.0
+
+
+class HealthcheckLogFilter(logging.Filter):
+    def __init__(self, interval_seconds):
+        super().__init__()
+        self.interval_seconds = interval_seconds
+        self._last_logged_at = 0.0
+
+    def filter(self, record):
+        message = record.getMessage()
+        if '"GET /health HTTP/' not in message:
+            return True
+
+        now = time.monotonic()
+        if now - self._last_logged_at < self.interval_seconds:
+            return False
+
+        self._last_logged_at = now
+        return True
+
+
+logging.getLogger("werkzeug").addFilter(
+    HealthcheckLogFilter(HEALTH_LOG_INTERVAL_SECONDS)
+)
 
 
 @app.route("/")

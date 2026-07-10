@@ -79,3 +79,19 @@ llama-cli -m Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf \
   --mmproj mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf \
   --jinja -c 8192 -ngl 99
 ```
+
+For normal local use, run the watchdog instead of `venv/bin/python app.py` directly:
+
+```bash
+venv/bin/python supervisor.py
+```
+
+The watchdog restarts `venv/bin/python app.py` immediately if it exits, and also restarts it if `/health` stays down for 10 seconds. The restart timing is configurable with:
+
+- `INFERENCE_APP_COMMAND`
+- `INFERENCE_HEALTH_URL`
+- `INFERENCE_HEALTH_POLL_SECONDS`
+- `INFERENCE_UNHEALTHY_GRACE_SECONDS`
+- `INFERENCE_MAX_RESTART_DELAY_SECONDS`
+- `INFERENCE_RESTART_DELAY_STEP_SECONDS`
+- `INFERENCE_STARTUP_GRACE_SECONDS`

@@ -5,6 +5,7 @@ from llama_cpp.llama_chat_format import Llava15ChatHandler
 
 
 DEFAULT_STOP = ["<turn|>", "USER:", "Assistant:", "ASSISTANT:", "<end_of_turn>", "###"]
+USE_LEGACY_DEFAULT_STOP = object()
 
 MODEL_DEFINITIONS = {
     "gemma-4-local": {
@@ -18,6 +19,12 @@ MODEL_DEFINITIONS = {
         "mmproj_path": None,
         "default_stop": [],
         "n_gpu_layers": 0,
+    },
+    "qwen-3.5-local": {
+        "model_path": "Suri-Qwen-3.5-9B-Uncensored.Q4_K_M.gguf",
+        "mmproj_path": None,
+        "default_stop": [],
+        "n_gpu_layers": 28,
     },
 }
 
@@ -68,14 +75,23 @@ class DebugLlava15ChatHandler(Llava15ChatHandler):
 
 
 class GemmaVisionModel:
-    def __init__(self, model_path, mmproj_path=None, default_stop=None, n_gpu_layers=0):
+    def __init__(
+        self,
+        model_path,
+        mmproj_path=None,
+        default_stop=USE_LEGACY_DEFAULT_STOP,
+        n_gpu_layers=0,
+    ):
         print(f"Loading model from {model_path}...")
         self.model_path = model_path
         self.mmproj_path = mmproj_path
         self._supports_vision = mmproj_path is not None
         self.n_ctx = 32768
         self.default_max_tokens = 1024
-        self.default_stop = default_stop if default_stop is not None else DEFAULT_STOP
+        if default_stop is USE_LEGACY_DEFAULT_STOP:
+            self.default_stop = DEFAULT_STOP
+        else:
+            self.default_stop = default_stop
         self.n_gpu_layers = int(os.environ.get("N_GPU_LAYERS", str(n_gpu_layers)))
         self.llm = Llama(
             model_path=model_path,
