@@ -10,6 +10,20 @@
     <div class="app-container">
         <header>
             <h1>Evil Gemma-4 E4B</h1>
+            <div class="header-controls">
+                <label class="model-picker" for="model-select">
+                    <span>Model</span>
+                    <select id="model-select" aria-label="Select model">
+                        <option value="">Loading...</option>
+                    </select>
+                </label>
+                <label class="model-picker" for="system-prompt-select">
+                    <span>System Prompt</span>
+                    <select id="system-prompt-select" aria-label="Select system prompt">
+                        <option value="">Loading...</option>
+                    </select>
+                </label>
+            </div>
         </header>
 
         <main id="chat-window" class="chat-window">

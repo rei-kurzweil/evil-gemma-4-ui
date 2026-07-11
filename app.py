@@ -6,7 +6,9 @@ from inference import (
     ModelUnavailableError,
     get_loaded_model_id,
     get_or_load_model,
+    get_system_prompt_by_index,
     list_model_definitions,
+    list_system_prompts,
 )
 import json
 import logging
@@ -74,6 +76,41 @@ def list_models():
             "capabilities": definition,
         })
     return jsonify({"object": "list", "data": data})
+
+
+@app.route("/system_prompts")
+def system_prompts():
+    prompts = []
+    for prompt in list_system_prompts():
+        prompts.append(
+            {
+                "index": prompt["index"],
+                "name": prompt["name"],
+                "source": prompt["source"],
+                "path": prompt["path"],
+            }
+        )
+    return jsonify({"object": "list", "data": prompts})
+
+
+@app.route("/system_prompts/<int:prompt_index>")
+def system_prompt(prompt_index):
+    try:
+        prompt = get_system_prompt_by_index(prompt_index)
+    except IndexError:
+        return openai_error(f"Unknown system prompt index '{prompt_index}'.", 404)
+    except OSError as exc:
+        return openai_error(f"Failed to read system prompt '{prompt_index}': {exc}", 500)
+
+    return jsonify(
+        {
+            "index": prompt["index"],
+            "name": prompt["name"],
+            "source": prompt["source"],
+            "path": prompt["path"],
+            "content": prompt["content"],
+        }
+    )
 
 
 @app.route("/v1/capabilities")

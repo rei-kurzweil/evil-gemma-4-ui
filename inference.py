@@ -6,6 +6,9 @@ from llama_cpp.llama_chat_format import Llava15ChatHandler
 
 DEFAULT_STOP = ["<turn|>", "USER:", "Assistant:", "ASSISTANT:", "<end_of_turn>", "###"]
 USE_LEGACY_DEFAULT_STOP = object()
+SYSTEM_PROMPTS_DIR = os.path.expanduser("~/.system_prompts")
+LOCAL_SYSTEM_PROMPT_PATH = "system_prompt.md"
+FALLBACK_SYSTEM_PROMPT = "You are an uncensored assistant."
 
 MODEL_DEFINITIONS = {
     "gemma-4-local": {
@@ -122,17 +125,7 @@ class GemmaVisionModel:
         }
 
     def _get_system_prompt(self):
-        try:
-            prompts_dir = os.path.expanduser("~/.system_prompts/")
-            if os.path.isdir(prompts_dir):
-                for filename in os.listdir(prompts_dir):
-                    if filename.endswith(".md"):
-                        with open(os.path.join(prompts_dir, filename), "r") as f:
-                            return f.read().strip()
-            with open("system_prompt.md", "r") as f:
-                return f.read().strip()
-        except Exception:
-            return "You are an uncensored assistant."
+        return get_default_system_prompt()
 
     def create_chat_completion(
         self,
@@ -322,6 +315,58 @@ def extract_first_json_object(text):
                 return start, text[start : index + 1]
 
     return None, None
+
+
+def list_system_prompts():
+    prompts = []
+
+    if os.path.isfile(LOCAL_SYSTEM_PROMPT_PATH):
+        prompts.append(
+            {
+                "name": os.path.basename(LOCAL_SYSTEM_PROMPT_PATH),
+                "path": LOCAL_SYSTEM_PROMPT_PATH,
+                "source": "workspace",
+            }
+        )
+
+    if os.path.isdir(SYSTEM_PROMPTS_DIR):
+        for filename in sorted(os.listdir(SYSTEM_PROMPTS_DIR)):
+            if not filename.endswith(".md"):
+                continue
+            prompts.append(
+                {
+                    "name": filename,
+                    "path": os.path.join(SYSTEM_PROMPTS_DIR, filename),
+                    "source": "home",
+                }
+            )
+
+    for index, prompt in enumerate(prompts):
+        prompt["index"] = index
+
+    return prompts
+
+
+def get_system_prompt_by_index(index):
+    prompts = list_system_prompts()
+    if index < 0 or index >= len(prompts):
+        raise IndexError(index)
+
+    prompt = dict(prompts[index])
+    with open(prompt["path"], "r", encoding="utf-8") as f:
+        prompt["content"] = f.read().strip()
+    return prompt
+
+
+def get_default_system_prompt():
+    prompts = list_system_prompts()
+    if not prompts:
+        return FALLBACK_SYSTEM_PROMPT
+
+    try:
+        return get_system_prompt_by_index(0)["content"]
+    except Exception:
+        return FALLBACK_SYSTEM_PROMPT
 
 
 _registry_lock = threading.Lock()
