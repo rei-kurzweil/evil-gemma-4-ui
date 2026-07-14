@@ -2,6 +2,7 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -19,6 +20,24 @@ APP_COMMAND = os.environ.get(
     "INFERENCE_APP_COMMAND",
     os.path.join("venv", "bin", "python") + " app.py",
 )
+LOG_PATH = os.environ.get("INFERENCE_LOG_PATH", "evil_gemma.log")
+LOG_LOCK = threading.Lock()
+
+
+def log(message, source="supervisor"):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] [{source}] {message}"
+    with LOG_LOCK:
+        print(line, flush=True)
+        with open(LOG_PATH, "a", encoding="utf-8") as log_file:
+            log_file.write(line + "\n")
+
+
+def copy_child_output(process):
+    if process.stdout is None:
+        return
+    for line in process.stdout:
+        log(line.rstrip("\r\n"), source="server")
 
 
 def healthcheck():
@@ -43,18 +62,33 @@ def terminate_process(process):
 
 
 def main():
-    print(f"[supervisor] Starting watchdog for `{APP_COMMAND}`.")
+    log(f"Starting watchdog for `{APP_COMMAND}`; logging to `{LOG_PATH}`.")
     restart_delay = 0.0
     argv = shlex.split(APP_COMMAND)
 
     while True:
         if restart_delay > 0:
-            print(f"[supervisor] Sleeping {restart_delay:.1f}s before restart.")
+            log(f"Sleeping {restart_delay:.1f}s before restart.")
             time.sleep(restart_delay)
 
         started_at = time.monotonic()
-        process = subprocess.Popen(argv)
-        print(f"[supervisor] Spawned server process pid={process.pid}.")
+        child_env = os.environ.copy()
+        child_env.setdefault("PYTHONUNBUFFERED", "1")
+        process = subprocess.Popen(
+            argv,
+            env=child_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        output_thread = threading.Thread(
+            target=copy_child_output,
+            args=(process,),
+            daemon=True,
+        )
+        output_thread.start()
+        log(f"Spawned server process pid={process.pid}.")
         unhealthy_since = None
 
         try:
@@ -62,9 +96,8 @@ def main():
                 exit_code = process.poll()
                 if exit_code is not None:
                     runtime = time.monotonic() - started_at
-                    print(
-                        f"[supervisor] Server exited with code {exit_code} after {runtime:.1f}s."
-                    )
+                    output_thread.join(timeout=2)
+                    log(f"Server exited with code {exit_code} after {runtime:.1f}s.")
                     if runtime < STARTUP_GRACE_SECONDS:
                         restart_delay = min(
                             MAX_RESTART_DELAY_SECONDS,
@@ -81,10 +114,10 @@ def main():
                     now = time.monotonic()
                     if unhealthy_since is None:
                         unhealthy_since = now
-                        print(f"[supervisor] Healthcheck failed: {exc}.")
+                        log(f"Healthcheck failed: {exc}.")
                     elif now - unhealthy_since >= UNHEALTHY_GRACE_SECONDS:
-                        print(
-                            "[supervisor] Server stayed unhealthy for "
+                        log(
+                            "Server stayed unhealthy for "
                             f"{UNHEALTHY_GRACE_SECONDS:.1f}s; restarting."
                         )
                         terminate_process(process)
@@ -93,7 +126,7 @@ def main():
 
                 time.sleep(HEALTH_POLL_SECONDS)
         except KeyboardInterrupt:
-            print("[supervisor] Stopping watchdog.")
+            log("Stopping watchdog.")
             terminate_process(process)
             return 0
 

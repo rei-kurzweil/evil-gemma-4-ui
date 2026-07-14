@@ -15,7 +15,7 @@ MODEL_DEFINITIONS = {
         "model_path": "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf",
         "mmproj_path": "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf",
         "default_stop": None,
-        "n_gpu_layers": 33,
+        "n_gpu_layers": 28,
     },
     "llama-3.1-local": {
         "model_path": "Llama-3.1-8B-Lexi-Uncensored-Q6_K_L.gguf",
@@ -96,6 +96,10 @@ class GemmaVisionModel:
         else:
             self.default_stop = default_stop
         self.n_gpu_layers = int(os.environ.get("N_GPU_LAYERS", str(n_gpu_layers)))
+        # llama.cpp's context and mutable chat handler are shared by every Flask
+        # request. Serialize complete generations so concurrent HTTP requests do
+        # not enter the same native context at once.
+        self._generation_lock = threading.Lock()
         self.llm = Llama(
             model_path=model_path,
             n_ctx=self.n_ctx,
@@ -139,6 +143,43 @@ class GemmaVisionModel:
         tool_choice=None,
         response_format=None,
     ):
+        if stream:
+            return self._stream_chat_completion(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stop=stop,
+                model=model,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+            )
+
+        with self._generation_lock:
+            return self._create_chat_completion_unlocked(
+                messages=messages,
+                stream=False,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stop=stop,
+                model=model,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+            )
+
+    def _create_chat_completion_unlocked(
+        self,
+        messages,
+        stream,
+        max_tokens,
+        temperature,
+        stop,
+        model,
+        tools,
+        tool_choice,
+        response_format,
+    ):
         prepared_messages = self._prepare_messages(messages)
         self._validate_vision_support(prepared_messages)
         self._select_chat_runtime(prepared_messages)
@@ -155,6 +196,14 @@ class GemmaVisionModel:
         if stream:
             return response
         return self._truncate_prompt_tool_call_response(response)
+
+    def _stream_chat_completion(self, **kwargs):
+        def generate():
+            with self._generation_lock:
+                response = self._create_chat_completion_unlocked(stream=True, **kwargs)
+                yield from response
+
+        return generate()
 
     def generate_response(
         self,

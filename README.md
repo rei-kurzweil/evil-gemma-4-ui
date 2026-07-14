@@ -95,3 +95,6 @@ The watchdog restarts `venv/bin/python app.py` immediately if it exits, and also
 - `INFERENCE_MAX_RESTART_DELAY_SECONDS`
 - `INFERENCE_RESTART_DELAY_STEP_SECONDS`
 - `INFERENCE_STARTUP_GRACE_SECONDS`
+- `INFERENCE_LOG_PATH` (defaults to `evil_gemma.log`)
+
+The watchdog writes timestamped supervisor messages and the server's merged stdout/stderr to the log while also displaying them in the terminal.
